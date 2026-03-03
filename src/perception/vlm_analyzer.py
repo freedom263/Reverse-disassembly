@@ -123,16 +123,15 @@ class VLMAnalyzer:
                 self.model_id,
                 trust_remote_code=True,
             )
-            # Use device_map with explicit single device to prevent meta tensors.
-            # Do NOT use device_map="auto" (splits across devices → meta tensors).
-            # Do NOT use low_cpu_mem_usage=True without device_map (also causes meta tensors).
-            device_map_arg = {"": target_device}
+            
+            # Load fully to CPU first without any device_map or memory args to avoid meta tensors,
+            # then manually move to the target device.
             VLMAnalyzer._instance_model = AutoModel.from_pretrained(
                 self.model_id,
                 torch_dtype=torch.bfloat16,
                 trust_remote_code=True,
-                device_map=device_map_arg,
-            ).eval()
+            ).eval().to(target_device)
+            
             print(f"[VLMAnalyzer] Model loaded on: {next(VLMAnalyzer._instance_model.parameters()).device}")
         
         self.model = VLMAnalyzer._instance_model
