@@ -3,6 +3,27 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# ===== Project Specific =====
+# Video data (too large for git)
+data/raw_videos/
+data/keyframes/
+data/golden_dataset/
+
+# Generated results
+results/
+
+# HuggingFace model cache (downloaded weights)
+.cache/
+models/
+*.bin
+*.safetensors
+*.pt
+*.ckpt
+
+# Colab / Jupyter checkpoints
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
 # C extensions
 *.so
 

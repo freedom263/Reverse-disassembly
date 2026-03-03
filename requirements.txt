@@ -1,0 +1,36 @@
+# ============================================================
+# Reverse Prompt Engineering System - Dependencies
+# Tested on: Google Colab T4 (CUDA 12.x, Python 3.10)
+# ============================================================
+
+# --- Deep Learning Core ---
+torch>=2.1.0
+torchvision>=0.16.0
+
+# --- Transformers & Model Loading ---
+transformers>=4.40.0
+accelerate>=0.28.0
+einops>=0.7.0
+timm>=0.9.0
+sentencepiece>=0.1.99
+protobuf>=3.20.0
+
+# --- Video Processing ---
+opencv-python-headless>=4.8.0
+scenedetect[opencv]>=0.6.3
+
+# --- Sentence Embeddings & Pattern Mining ---
+sentence-transformers>=2.7.0
+scikit-learn>=1.4.0
+numpy>=1.26.0
+
+# --- Data & Utilities ---
+Pillow>=10.0.0
+tqdm>=4.66.0
+requests>=2.31.0
+
+# --- Data Download ---
+yt-dlp>=2024.1.0
+
+# --- Notebook Support ---
+ipywidgets>=8.0.0
