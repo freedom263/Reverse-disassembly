@@ -188,6 +188,17 @@ def download_by_search(
         "--no-playlist",
         "--quiet",
         "--progress",
+        # --- Anti-412 headers: Bilibili requires Referer & real UA ---
+        "--add-header", "Referer:https://www.bilibili.com",
+        "--add-header", "Origin:https://www.bilibili.com",
+        "--user-agent", (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+        # Random sleep 2-5s between requests to avoid rate-limit
+        "--sleep-interval", "2",
+        "--max-sleep-interval", "5",
         query,
     ]
 
