@@ -8,23 +8,31 @@ import cv2
 def _transcode_to_h264(video_path: str) -> str | None:
     """
     Transcode a video to H264 using ffmpeg if OpenCV can't open it (e.g. AV1).
+    Uses -fflags +genpts and -err_detect ignore_err to handle incomplete/corrupt files.
     Returns the path to the transcoded file, or None on failure.
     """
     out_path = video_path.rsplit(".", 1)[0] + "_h264.mp4"
-    if os.path.exists(out_path):
+    if os.path.exists(out_path) and os.path.getsize(out_path) > 100_000:
         return out_path
     cmd = [
         "ffmpeg", "-y",
+        "-fflags", "+genpts+igndts",       # handle missing/incomplete PTS
+        "-err_detect", "ignore_err",         # skip corrupt packets
         "-i", video_path,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-c:a", "aac",
-        "-loglevel", "error",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "28",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",           # write moov atom at start
+        "-loglevel", "warning",              # suppress info spam
         out_path,
     ]
     try:
-        subprocess.run(cmd, check=True, timeout=300)
-        print(f"  [Transcode] AV1→H264: {os.path.basename(out_path)}")
-        return out_path
+        subprocess.run(cmd, check=True, timeout=600)
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 100_000:
+            print(f"  [Transcode] AV1\u2192H264: {os.path.basename(out_path)}")
+            return out_path
+        else:
+            print(f"  [Transcode] ffmpeg produced empty file for {os.path.basename(video_path)}")
+            return None
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
         print(f"  [Transcode] ffmpeg failed: {e}")
         return None

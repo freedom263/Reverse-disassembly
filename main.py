@@ -139,7 +139,10 @@ def run_batch(
     """
     Run the pipeline on all MP4 files in a directory.
     """
-    video_files = sorted(Path(video_dir).glob("*.mp4"))
+    video_files = sorted(
+        f for f in Path(video_dir).glob("*.mp4")
+        if not f.name.endswith("_h264.mp4")  # skip transcoded copies
+    )
     if not video_files:
         print(f"[Batch] No MP4 files found in {video_dir}")
         return []
