@@ -112,18 +112,24 @@ class VLMAnalyzer:
         if VLMAnalyzer._instance_model is None:
             print(f"[VLMAnalyzer] Loading model: {self.model_id}")
             print("  (First run will download ~4GB weights from HuggingFace)")
-            
+
+            # Determine target device explicitly (avoid meta tensor issue with device_map='auto')
+            if device == "auto":
+                target_device = "cuda" if torch.cuda.is_available() else "cpu"
+            else:
+                target_device = device
+
             VLMAnalyzer._instance_tokenizer = AutoTokenizer.from_pretrained(
                 self.model_id,
                 trust_remote_code=True,
             )
+            # Load to CPU first, then move to GPU to avoid meta tensor errors
             VLMAnalyzer._instance_model = AutoModel.from_pretrained(
                 self.model_id,
                 torch_dtype=torch.bfloat16,
                 low_cpu_mem_usage=True,
                 trust_remote_code=True,
-                device_map=device,
-            ).eval()
+            ).eval().to(target_device)
             print(f"[VLMAnalyzer] Model loaded on: {next(VLMAnalyzer._instance_model.parameters()).device}")
         
         self.model = VLMAnalyzer._instance_model
