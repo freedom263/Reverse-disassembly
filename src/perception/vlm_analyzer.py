@@ -119,20 +119,29 @@ class VLMAnalyzer:
             else:
                 target_device = device
 
+            # Choose appropriate dtype (T4 supports float16 better than bfloat16)
+            if target_device == "cuda":
+                dtype = torch.float16
+            else:
+                dtype = torch.float32
+            
+            print(f"[VLMAnalyzer] Loading to {target_device} with dtype {dtype}")
+
             VLMAnalyzer._instance_tokenizer = AutoTokenizer.from_pretrained(
                 self.model_id,
                 trust_remote_code=True,
             )
             
-            # Load fully to CPU first without any device_map or memory args to avoid meta tensors,
-            # then manually move to the target device.
+            # Load model with low_cpu_mem_usage=False to avoid meta tensors
+            # This ensures full weight initialization before moving to device
             VLMAnalyzer._instance_model = AutoModel.from_pretrained(
                 self.model_id,
-                torch_dtype=torch.bfloat16,
+                torch_dtype=dtype,
+                low_cpu_mem_usage=False,  # Critical: avoid meta tensors
                 trust_remote_code=True,
-            ).eval().to(target_device)
+            ).to(target_device).eval()
             
-            print(f"[VLMAnalyzer] Model loaded on: {next(VLMAnalyzer._instance_model.parameters()).device}")
+            print(f"[VLMAnalyzer] Model loaded successfully on: {next(VLMAnalyzer._instance_model.parameters()).device}")
         
         self.model = VLMAnalyzer._instance_model
         self.tokenizer = VLMAnalyzer._instance_tokenizer
@@ -154,10 +163,13 @@ class VLMAnalyzer:
         
         print(f"[VLMAnalyzer] Analyzing: {os.path.basename(image_path)}")
         
+        model_device = next(self.model.parameters()).device
+        model_dtype = next(self.model.parameters()).dtype
+        
         # Load and preprocess image
         pixel_values = _load_image(image_path).to(
-            dtype=torch.bfloat16,
-            device=next(self.model.parameters()).device,
+            dtype=model_dtype,
+            device=model_device,
         )
         
         # Generation config
