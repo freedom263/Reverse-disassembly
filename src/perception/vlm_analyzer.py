@@ -156,6 +156,28 @@ class VLMAnalyzer:
                 
                 torch.linspace = safe_linspace
                 
+                # CRITICAL FIX 2: Patch transformers' tied weights check for InternVL2 compatibility
+                # InternVL2 uses _tied_weights_keys but transformers>=4.50 expects all_tied_weights_keys
+                from transformers import PreTrainedModel
+                original_mark_tied = PreTrainedModel.mark_tied_weights_as_initialized
+                
+                def safe_mark_tied_weights(self):
+                    try:
+                        # Try to add missing attribute if needed
+                        if not hasattr(self, 'all_tied_weights_keys'):
+                            if hasattr(self, '_tied_weights_keys'):
+                                # Convert _tied_weights_keys to all_tied_weights_keys format
+                                self.all_tied_weights_keys = {k: None for k in self._tied_weights_keys}
+                            else:
+                                self.all_tied_weights_keys = {}
+                        return original_mark_tied(self)
+                    except AttributeError as e:
+                        # If still failing, just skip tied weights initialization
+                        print(f"[VLMAnalyzer] Warning: Skipping tied weights initialization: {e}")
+                        return
+                
+                PreTrainedModel.mark_tied_weights_as_initialized = safe_mark_tied_weights
+                
                 try:
                     # Load model WITHOUT device_map to avoid meta tensor initialization
                     # This uses the traditional loading path without accelerate's optimization
@@ -173,9 +195,11 @@ class VLMAnalyzer:
                             torch_dtype=dtype,
                             trust_remote_code=True,
                         )
+                    
                 finally:
-                    # Restore original linspace
+                    # Restore original functions
                     torch.linspace = original_linspace
+                    PreTrainedModel.mark_tied_weights_as_initialized = original_mark_tied
                 
                 VLMAnalyzer._instance_model.eval()
                 
