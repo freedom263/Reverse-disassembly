@@ -165,13 +165,15 @@ class VLMAnalyzer:
                     try:
                         # Try to add missing attribute if needed
                         if not hasattr(self, 'all_tied_weights_keys'):
-                            if hasattr(self, '_tied_weights_keys'):
-                                # Convert _tied_weights_keys to all_tied_weights_keys format
-                                self.all_tied_weights_keys = {k: None for k in self._tied_weights_keys}
+                            # Convert _tied_weights_keys to all_tied_weights_keys format
+                            tied_keys = getattr(self, '_tied_weights_keys', None)
+                            if tied_keys is not None and tied_keys:
+                                self.all_tied_weights_keys = {k: None for k in tied_keys}
                             else:
+                                # Empty dict if no tied weights
                                 self.all_tied_weights_keys = {}
                         return original_mark_tied(self)
-                    except AttributeError as e:
+                    except (AttributeError, TypeError) as e:
                         # If still failing, just skip tied weights initialization
                         print(f"[VLMAnalyzer] Warning: Skipping tied weights initialization: {e}")
                         return
