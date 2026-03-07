@@ -205,13 +205,14 @@ class VLMAnalyzer:
                     # The InternVL model has a language_model attribute (InternLM2ForCausalLM)
                     if hasattr(VLMAnalyzer._instance_model, 'language_model'):
                         lm = VLMAnalyzer._instance_model.language_model
-                        # Add all GenerationMixin methods to the language model instance
+                        # Add ALL GenerationMixin methods (including private ones) to the language model instance
+                        import types
                         for attr_name in dir(GenerationMixin):
-                            if not attr_name.startswith('_'):
+                            # Include both public and private methods (but skip magic methods like __init__)
+                            if not attr_name.startswith('__'):
                                 attr = getattr(GenerationMixin, attr_name)
                                 if callable(attr) and not hasattr(lm, attr_name):
                                     # Bind the method to the instance
-                                    import types
                                     setattr(lm, attr_name, types.MethodType(attr, lm))
                         print(f"[VLMAnalyzer] Added GenerationMixin methods to language_model")
                     
