@@ -279,14 +279,11 @@ class VLMAnalyzer:
             device=self.device,
         )
         
-        # Generation config - use GenerationConfig object instead of dict
-        from transformers import GenerationConfig
-        generation_config = GenerationConfig(
-            max_new_tokens=512,
-            do_sample=False,
-            temperature=1.0,  # Don't use None, use default value
-            top_p=1.0,        # Don't use None, use default value
-        )
+        # Generation config - InternVL2's chat() expects a dict, not GenerationConfig object
+        generation_config = {
+            "max_new_tokens": 512,
+            "do_sample": False,
+        }
         
         # Run inference
         response = self.model.chat(
