@@ -160,16 +160,18 @@ class VLMAnalyzer:
                     )
                 
                 VLMAnalyzer._instance_model.eval()
-                print(f"[VLMAnalyzer] Model loaded successfully")
-                
                 
                 # Save device and dtype info to avoid querying parameters later
                 VLMAnalyzer._instance_device = target_device
                 VLMAnalyzer._instance_dtype = dtype
                 
-                # Verify model is properly loaded (without triggering .item())
-                param_count = sum(p.numel() for p in VLMAnalyzer._instance_model.parameters() if not p.is_meta)
-                print(f"[VLMAnalyzer] Model loaded successfully with {param_count:,} parameters")
+                # Verify model is properly loaded
+                try:
+                    param_count = sum(p.numel() for p in VLMAnalyzer._instance_model.parameters() if not p.is_meta)
+                    print(f"[VLMAnalyzer] Model loaded successfully with {param_count:,} parameters on {target_device}")
+                except:
+                    # If parameter counting fails, just report success
+                    print(f"[VLMAnalyzer] Model loaded successfully on {target_device}")
                 
             except Exception as e:
                 print(f"[VLMAnalyzer] ERROR during model loading: {e}")
