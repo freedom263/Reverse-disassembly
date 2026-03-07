@@ -140,6 +140,29 @@ class VLMAnalyzer:
                     self.model_id,
                     trust_remote_code=True,
                 )
+                
+                # CRITICAL FIX 6: Add missing clean_up_tokenization method to InternLM2Tokenizer
+                # This method is called during decode() but not implemented in InternLM2Tokenizer
+                if not hasattr(VLMAnalyzer._instance_tokenizer, 'clean_up_tokenization'):
+                    def clean_up_tokenization(self, out_string: str) -> str:
+                        """Clean up tokenization artifacts after decoding."""
+                        # Remove extra spaces before punctuation
+                        out_string = out_string.replace(" .", ".").replace(" ?", "?").replace(" !", "!")
+                        out_string = out_string.replace(" ,", ",").replace(" :", ":").replace(" ;", ";")
+                        # Fix contractions
+                        out_string = out_string.replace(" '", "'").replace(" n't", "n't")
+                        out_string = out_string.replace(" 'm", "'m").replace(" 's", "'s")
+                        out_string = out_string.replace(" 've", "'ve").replace(" 're", "'re")
+                        return out_string.strip()
+                    
+                    # Bind the method to the tokenizer instance
+                    import types
+                    VLMAnalyzer._instance_tokenizer.clean_up_tokenization = types.MethodType(
+                        clean_up_tokenization, 
+                        VLMAnalyzer._instance_tokenizer
+                    )
+                    print(f"[VLMAnalyzer] Added clean_up_tokenization method to tokenizer")
+                
                 print(f"[VLMAnalyzer] Tokenizer loaded successfully")
                 
                 print(f"[VLMAnalyzer] Loading model weights (this may take 1-2 minutes)...")
