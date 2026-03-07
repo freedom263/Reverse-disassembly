@@ -96,6 +96,8 @@ class VLMAnalyzer:
     MODEL_ID = "OpenGVLab/InternVL2-2B"
     _instance_model = None
     _instance_tokenizer = None
+    _instance_device = None
+    _instance_dtype = None
 
     def __init__(self, model_id: str = None, device: str = "auto", lang: str = "en"):
         """
@@ -127,24 +129,51 @@ class VLMAnalyzer:
             
             print(f"[VLMAnalyzer] Loading to {target_device} with dtype {dtype}")
 
-            VLMAnalyzer._instance_tokenizer = AutoTokenizer.from_pretrained(
-                self.model_id,
-                trust_remote_code=True,
-            )
-            
-            # Load model with low_cpu_mem_usage=False to avoid meta tensors
-            # This ensures full weight initialization before moving to device
-            VLMAnalyzer._instance_model = AutoModel.from_pretrained(
-                self.model_id,
-                torch_dtype=dtype,
-                low_cpu_mem_usage=False,  # Critical: avoid meta tensors
-                trust_remote_code=True,
-            ).to(target_device).eval()
-            
-            print(f"[VLMAnalyzer] Model loaded successfully on: {next(VLMAnalyzer._instance_model.parameters()).device}")
+            try:
+                VLMAnalyzer._instance_tokenizer = AutoTokenizer.from_pretrained(
+                    self.model_id,
+                    trust_remote_code=True,
+                )
+                print(f"[VLMAnalyzer] Tokenizer loaded successfully")
+                
+                # Load model completely to CPU first, avoiding ANY lazy/meta tensor loading
+                print(f"[VLMAnalyzer] Step 1: Loading weights to CPU (this may take 1-2 minutes)...")
+                VLMAnalyzer._instance_model = AutoModel.from_pretrained(
+                    self.model_id,
+                    torch_dtype=torch.float32,  # Load as float32 on CPU first
+                    low_cpu_mem_usage=False,     # Disable memory optimization
+                    device_map=None,              # Explicitly disable device_map
+                    _fast_init=False,             # Disable fast initialization (avoid meta tensors)
+                    trust_remote_code=True,
+                )
+                print(f"[VLMAnalyzer] Weights loaded to CPU")
+                
+                # Convert and move to target device
+                if target_device == "cuda":
+                    print(f"[VLMAnalyzer] Step 2: Converting to {dtype} and moving to GPU...")
+                    VLMAnalyzer._instance_model = VLMAnalyzer._instance_model.to(dtype).to(target_device)
+                    print(f"[VLMAnalyzer] Model moved to GPU")
+                
+                VLMAnalyzer._instance_model.eval()
+                
+                # Save device and dtype info to avoid querying parameters later
+                VLMAnalyzer._instance_device = target_device
+                VLMAnalyzer._instance_dtype = dtype
+                
+                # Verify model is properly loaded (without triggering .item())
+                param_count = sum(p.numel() for p in VLMAnalyzer._instance_model.parameters() if not p.is_meta)
+                print(f"[VLMAnalyzer] Model loaded successfully with {param_count:,} parameters")
+                
+            except Exception as e:
+                print(f"[VLMAnalyzer] ERROR during model loading: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
         
         self.model = VLMAnalyzer._instance_model
         self.tokenizer = VLMAnalyzer._instance_tokenizer
+        self.device = VLMAnalyzer._instance_device
+        self.dtype = VLMAnalyzer._instance_dtype
 
     def analyze_keyframe(self, image_path: str) -> dict:
         """
@@ -163,13 +192,10 @@ class VLMAnalyzer:
         
         print(f"[VLMAnalyzer] Analyzing: {os.path.basename(image_path)}")
         
-        model_device = next(self.model.parameters()).device
-        model_dtype = next(self.model.parameters()).dtype
-        
-        # Load and preprocess image
+        # Load and preprocess image (use saved device/dtype info)
         pixel_values = _load_image(image_path).to(
-            dtype=model_dtype,
-            device=model_device,
+            dtype=self.dtype,
+            device=self.device,
         )
         
         # Generation config
