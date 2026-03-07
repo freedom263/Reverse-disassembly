@@ -198,6 +198,23 @@ class VLMAnalyzer:
                             trust_remote_code=True,
                         )
                     
+                    # CRITICAL FIX 4: Manually add GenerationMixin to the language model
+                    # transformers>=4.50 removed automatic GenerationMixin inheritance
+                    from transformers.generation.utils import GenerationMixin
+                    
+                    # The InternVL model has a language_model attribute (InternLM2ForCausalLM)
+                    if hasattr(VLMAnalyzer._instance_model, 'language_model'):
+                        lm = VLMAnalyzer._instance_model.language_model
+                        # Add all GenerationMixin methods to the language model instance
+                        for attr_name in dir(GenerationMixin):
+                            if not attr_name.startswith('_'):
+                                attr = getattr(GenerationMixin, attr_name)
+                                if callable(attr) and not hasattr(lm, attr_name):
+                                    # Bind the method to the instance
+                                    import types
+                                    setattr(lm, attr_name, types.MethodType(attr, lm))
+                        print(f"[VLMAnalyzer] Added GenerationMixin methods to language_model")
+                    
                 finally:
                     # Restore original functions
                     torch.linspace = original_linspace
