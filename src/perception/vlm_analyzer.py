@@ -198,14 +198,23 @@ class VLMAnalyzer:
                             trust_remote_code=True,
                         )
                     
-                    # CRITICAL FIX 4: Manually add GenerationMixin to the language model
+                    # CRITICAL FIX 4: Make InternLM2ForCausalLM inherit from GenerationMixin
                     # transformers>=4.50 removed automatic GenerationMixin inheritance
+                    # Solution: Dynamically add GenerationMixin to the class's base classes
                     from transformers.generation.utils import GenerationMixin
                     from transformers import GenerationConfig
                     
                     # The InternVL model has a language_model attribute (InternLM2ForCausalLM)
                     if hasattr(VLMAnalyzer._instance_model, 'language_model'):
                         lm = VLMAnalyzer._instance_model.language_model
+                        lm_class = lm.__class__
+                        
+                        # Check if class already inherits from GenerationMixin
+                        if not issubclass(lm_class, GenerationMixin):
+                            # Modify the class hierarchy to include GenerationMixin
+                            # This ensures all methods (instance, class, static, properties) are available
+                            lm_class.__bases__ = (GenerationMixin,) + lm_class.__bases__
+                            print(f"[VLMAnalyzer] Added GenerationMixin to {lm_class.__name__} class hierarchy")
                         
                         # Add generation_config if missing
                         if not hasattr(lm, 'generation_config'):
@@ -216,17 +225,6 @@ class VLMAnalyzer:
                                 # Use default generation config
                                 lm.generation_config = GenerationConfig()
                             print(f"[VLMAnalyzer] Added generation_config to language_model")
-                        
-                        # Add ALL GenerationMixin methods (including private ones) to the language model instance
-                        import types
-                        for attr_name in dir(GenerationMixin):
-                            # Include both public and private methods (but skip magic methods like __init__)
-                            if not attr_name.startswith('__'):
-                                attr = getattr(GenerationMixin, attr_name)
-                                if callable(attr) and not hasattr(lm, attr_name):
-                                    # Bind the method to the instance
-                                    setattr(lm, attr_name, types.MethodType(attr, lm))
-                        print(f"[VLMAnalyzer] Added GenerationMixin methods to language_model")
                     
                 finally:
                     # Restore original functions
