@@ -130,31 +130,38 @@ class VLMAnalyzer:
             print(f"[VLMAnalyzer] Loading to {target_device} with dtype {dtype}")
 
             try:
+                import os
+                # Prevent accelerate from using meta tensors
+                os.environ.pop('ACCELERATE_USE_FAST_INIT', None)
+                
                 VLMAnalyzer._instance_tokenizer = AutoTokenizer.from_pretrained(
                     self.model_id,
                     trust_remote_code=True,
                 )
                 print(f"[VLMAnalyzer] Tokenizer loaded successfully")
                 
-                # Load model completely to CPU first, avoiding ANY lazy/meta tensor loading
-                print(f"[VLMAnalyzer] Step 1: Loading weights to CPU (this may take 1-2 minutes)...")
-                VLMAnalyzer._instance_model = AutoModel.from_pretrained(
-                    self.model_id,
-                    torch_dtype=torch.float32,  # Load as float32 on CPU first
-                    low_cpu_mem_usage=False,     # Disable memory optimization
-                    device_map=None,              # Explicitly disable device_map
-                    _fast_init=False,             # Disable fast initialization (avoid meta tensors)
-                    trust_remote_code=True,
-                )
-                print(f"[VLMAnalyzer] Weights loaded to CPU")
+                print(f"[VLMAnalyzer] Loading model weights (this may take 1-2 minutes)...")
                 
-                # Convert and move to target device
+                # Load model WITHOUT device_map to avoid meta tensor initialization
+                # This uses the traditional loading path without accelerate's optimization
                 if target_device == "cuda":
-                    print(f"[VLMAnalyzer] Step 2: Converting to {dtype} and moving to GPU...")
-                    VLMAnalyzer._instance_model = VLMAnalyzer._instance_model.to(dtype).to(target_device)
-                    print(f"[VLMAnalyzer] Model moved to GPU")
+                    # Load to GPU directly with target dtype
+                    VLMAnalyzer._instance_model = AutoModel.from_pretrained(
+                        self.model_id,
+                        torch_dtype=dtype,
+                        trust_remote_code=True,
+                    ).to(target_device)
+                else:
+                    # Load to CPU
+                    VLMAnalyzer._instance_model = AutoModel.from_pretrained(
+                        self.model_id,
+                        torch_dtype=dtype,
+                        trust_remote_code=True,
+                    )
                 
                 VLMAnalyzer._instance_model.eval()
+                print(f"[VLMAnalyzer] Model loaded successfully")
+                
                 
                 # Save device and dtype info to avoid querying parameters later
                 VLMAnalyzer._instance_device = target_device
