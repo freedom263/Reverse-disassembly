@@ -201,10 +201,22 @@ class VLMAnalyzer:
                     # CRITICAL FIX 4: Manually add GenerationMixin to the language model
                     # transformers>=4.50 removed automatic GenerationMixin inheritance
                     from transformers.generation.utils import GenerationMixin
+                    from transformers import GenerationConfig
                     
                     # The InternVL model has a language_model attribute (InternLM2ForCausalLM)
                     if hasattr(VLMAnalyzer._instance_model, 'language_model'):
                         lm = VLMAnalyzer._instance_model.language_model
+                        
+                        # Add generation_config if missing
+                        if not hasattr(lm, 'generation_config'):
+                            # Try to load from model or use default
+                            try:
+                                lm.generation_config = GenerationConfig.from_pretrained(self.model_id)
+                            except:
+                                # Use default generation config
+                                lm.generation_config = GenerationConfig()
+                            print(f"[VLMAnalyzer] Added generation_config to language_model")
+                        
                         # Add ALL GenerationMixin methods (including private ones) to the language model instance
                         import types
                         for attr_name in dir(GenerationMixin):
