@@ -131,6 +131,8 @@ class VLMAnalyzer:
 
             try:
                 import os
+                import sys
+                
                 # Prevent accelerate from using meta tensors
                 os.environ.pop('ACCELERATE_USE_FAST_INIT', None)
                 
@@ -142,22 +144,38 @@ class VLMAnalyzer:
                 
                 print(f"[VLMAnalyzer] Loading model weights (this may take 1-2 minutes)...")
                 
-                # Load model WITHOUT device_map to avoid meta tensor initialization
-                # This uses the traditional loading path without accelerate's optimization
-                if target_device == "cuda":
-                    # Load to GPU directly with target dtype
-                    VLMAnalyzer._instance_model = AutoModel.from_pretrained(
-                        self.model_id,
-                        torch_dtype=dtype,
-                        trust_remote_code=True,
-                    ).to(target_device)
-                else:
-                    # Load to CPU
-                    VLMAnalyzer._instance_model = AutoModel.from_pretrained(
-                        self.model_id,
-                        torch_dtype=dtype,
-                        trust_remote_code=True,
-                    )
+                # CRITICAL FIX: Patch to prevent meta tensor issues in InternVL2's __init__
+                # The model's code calls torch.linspace().item() which fails on meta tensors
+                # We temporarily monkey-patch torch.linspace to ensure it never creates meta tensors
+                original_linspace = torch.linspace
+                def safe_linspace(*args, **kwargs):
+                    # Force device to be non-meta
+                    if 'device' not in kwargs or kwargs.get('device') == torch.device('meta'):
+                        kwargs['device'] = 'cpu'
+                    return original_linspace(*args, **kwargs)
+                
+                torch.linspace = safe_linspace
+                
+                try:
+                    # Load model WITHOUT device_map to avoid meta tensor initialization
+                    # This uses the traditional loading path without accelerate's optimization
+                    if target_device == "cuda":
+                        # Load to GPU directly with target dtype
+                        VLMAnalyzer._instance_model = AutoModel.from_pretrained(
+                            self.model_id,
+                            torch_dtype=dtype,
+                            trust_remote_code=True,
+                        ).to(target_device)
+                    else:
+                        # Load to CPU
+                        VLMAnalyzer._instance_model = AutoModel.from_pretrained(
+                            self.model_id,
+                            torch_dtype=dtype,
+                            trust_remote_code=True,
+                        )
+                finally:
+                    # Restore original linspace
+                    torch.linspace = original_linspace
                 
                 VLMAnalyzer._instance_model.eval()
                 
