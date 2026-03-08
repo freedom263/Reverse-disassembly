@@ -229,37 +229,11 @@ class VLMAnalyzer:
                                 trust_remote_code=True,
                             )
                     
-                    # CRITICAL FIX 4: Make InternLM2ForCausalLM inherit from GenerationMixin
-                    # transformers>=4.50 removed automatic GenerationMixin inheritance
-                    # Solution: Dynamically add GenerationMixin to the class's base classes
-                    from transformers.generation.utils import GenerationMixin
-                    from transformers import GenerationConfig
-                    
-                    # The InternVL model has a language_model attribute (InternLM2ForCausalLM)
-                    if hasattr(VLMAnalyzer._instance_model, 'language_model'):
-                        lm = VLMAnalyzer._instance_model.language_model
-                        lm_class = lm.__class__
-                        
-                        # Check if class already inherits from GenerationMixin
-                        if not issubclass(lm_class, GenerationMixin):
-                            # Modify the class hierarchy to include GenerationMixin
-                            # This ensures all methods (instance, class, static, properties) are available
-                            lm_class.__bases__ = (GenerationMixin,) + lm_class.__bases__
-                            print(f"[VLMAnalyzer] Added GenerationMixin to {lm_class.__name__} class hierarchy")
-                        
-                        # Add generation_config if missing
-                        if not hasattr(lm, 'generation_config'):
-                            # Try to load from model or use default
-                            try:
-                                lm.generation_config = GenerationConfig.from_pretrained(self.model_id)
-                            except:
-                                # Use default generation config
-                                lm.generation_config = GenerationConfig()
-                            print(f"[VLMAnalyzer] Added generation_config to language_model")
-                    
-                finally:
-                    # Restore original functions
-                    torch.linspace = original_linspace
+                    # REMOVED: GenerationMixin dynamic inheritance manipulation
+                    # This was causing token generation to collapse into random characters.
+                    # InternVL2's chat() method should work without this modification.
+                    # If we need generate() functionality, we'll access it through the model's
+                    # existing implementation rather than monkey-patching the class hierarchy.
                     PreTrainedModel.mark_tied_weights_as_initialized = original_mark_tied
                 
                 VLMAnalyzer._instance_model.eval()
@@ -310,44 +284,47 @@ class VLMAnalyzer:
             device=self.device,
         )
 
-        # ========== ATTEMPT 1: Deterministic generation with strong JSON syntax ==========
-        gen_config_1 = {
-            "max_new_tokens": 280,
-            "do_sample": False,  # Greedy decoding for consistency
-        }
-        
-        response_1 = self.model.chat(
-            self.tokenizer,
-            pixel_values,
-            self.prompt,
-            gen_config_1,
-        )
-        parsed_1 = self._try_parse_response(response_1)
-        if parsed_1 is not None and not self._is_degenerate_response(response_1):
-            parsed_1["_source_frame"] = image_path
-            return parsed_1
+        # ========== ATTEMPT 1: Call chat() with minimal, safe parameters ==========
+        # Remove generation_config to let InternVL2 use its defaults
+        try:
+            response_1 = self.model.chat(
+                self.tokenizer,
+                pixel_values,
+                self.prompt,
+            )
+            
+            parsed_1 = self._try_parse_response(response_1)
+            if parsed_1 is not None and not self._is_degenerate_response(response_1):
+                parsed_1["_source_frame"] = image_path
+                return parsed_1
+        except Exception as e:
+            print(f"  [WARN] chat() attempt 1 failed: {e}")
+            response_1 = ""
 
-        # ========== ATTEMPT 2: Explicit retry with minimal template ==========
-        retry_prompt = RETRY_PROMPT_ZH if self.lang == "zh" else RETRY_PROMPT_EN
-        gen_config_2 = {
-            "max_new_tokens": 200,
-            "do_sample": False,
-        }
-        
-        response_2 = self.model.chat(
-            self.tokenizer,
-            pixel_values,
-            retry_prompt,
-            gen_config_2,
-        )
-        parsed_2 = self._try_parse_response(response_2)
-        if parsed_2 is not None:
-            parsed_2["_source_frame"] = image_path
-            return parsed_2
+        # ========== ATTEMPT 2: Try with explicit simple generation config ==========
+        try:
+            gen_config_minimal = {
+                "max_new_tokens": 200,
+            }
+            response_2 = self.model.chat(
+                self.tokenizer,
+                pixel_values,
+                self.prompt,
+                gen_config_minimal,
+            )
+            
+            parsed_2 = self._try_parse_response(response_2)
+            if parsed_2 is not None:
+                parsed_2["_source_frame"] = image_path
+                return parsed_2
+        except Exception as e:
+            print(f"  [WARN] chat() attempt 2 failed: {e}")
+            response_2 = ""
 
         # ========== ATTEMPT 3: Field-level extraction from raw text ==========
         print(f"  [DEBUG] Response 1 preview: {response_1[:150] if response_1 else 'EMPTY'}")
         print(f"  [DEBUG] Response 2 preview: {response_2[:150] if response_2 else 'EMPTY'}")
+        
         field_extracted = self._extract_fields_from_text(response_2 or response_1)
         if field_extracted and any(v != "unknown" for v in field_extracted.values()):
             print(f"  [ATTEMPT3] Extracted {sum(1 for v in field_extracted.values() if v != 'unknown')} fields via regex")
@@ -355,7 +332,7 @@ class VLMAnalyzer:
             field_extracted["_extraction_method"] = "field-level regex"
             return field_extracted
 
-        print("  [WARN] Could not parse JSON after retry, returning fallback object")
+        print("  [WARN] All attempts failed, returning fallback object")
         return self._fallback_result(response_2 or response_1, image_path)
 
     def analyze_batch(self, image_paths: list[str]) -> list[dict]:

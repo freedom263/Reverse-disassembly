@@ -65,14 +65,13 @@ class LLMAgentBase:
                     trust_remote_code=True,
                 ).to(target_device).eval()
             
-            # Ensure GenerationMixin is available (for transformers>=4.50 compatibility)
+            # Warn about GenerationMixin (but don't try to modify class hierarchy)
+            # transformers>=4.50 may warn about this, but it's not critical for chat-style usage
             from transformers.generation.utils import GenerationMixin
             if not isinstance(cls._model, GenerationMixin):
-                # If model doesn't have GenerationMixin, add it to class hierarchy
-                model_class = cls._model.__class__
-                if not issubclass(model_class, GenerationMixin):
-                    model_class.__bases__ = (GenerationMixin,) + model_class.__bases__
-                    print(f"[LLMAgent] Added GenerationMixin to {model_class.__name__}")
+                print(f"[LLMAgent] WARNING: {cls.MODEL_ID} doesn't inherit from GenerationMixin")
+                print(f"[LLMAgent] Text generation should still work via forward/inference, but be aware")
+            
             
             # Cache device to avoid querying parameters
             cls._device = target_device
