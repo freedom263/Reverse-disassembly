@@ -50,11 +50,20 @@ class LLMAgentBase:
                 dtype = torch.float32
             
             # Load model WITHOUT device_map to avoid potential meta tensor issues
-            cls._model = AutoModelForCausalLM.from_pretrained(
-                cls.MODEL_ID,
-                torch_dtype=dtype,
-                trust_remote_code=True,
-            ).to(target_device).eval()
+            try:
+                # Try new API first (transformers>=4.50)
+                cls._model = AutoModelForCausalLM.from_pretrained(
+                    cls.MODEL_ID,
+                    dtype=dtype,
+                    trust_remote_code=True,
+                ).to(target_device).eval()
+            except TypeError:
+                # Fallback for older transformers versions
+                cls._model = AutoModelForCausalLM.from_pretrained(
+                    cls.MODEL_ID,
+                    torch_dtype=dtype,
+                    trust_remote_code=True,
+                ).to(target_device).eval()
             
             # Ensure GenerationMixin is available (for transformers>=4.50 compatibility)
             from transformers.generation.utils import GenerationMixin

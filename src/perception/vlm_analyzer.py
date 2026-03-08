@@ -346,8 +346,11 @@ class VLMAnalyzer:
             return parsed_2
 
         # ========== ATTEMPT 3: Field-level extraction from raw text ==========
+        print(f"  [DEBUG] Response 1 preview: {response_1[:150] if response_1 else 'EMPTY'}")
+        print(f"  [DEBUG] Response 2 preview: {response_2[:150] if response_2 else 'EMPTY'}")
         field_extracted = self._extract_fields_from_text(response_2 or response_1)
         if field_extracted and any(v != "unknown" for v in field_extracted.values()):
+            print(f"  [ATTEMPT3] Extracted {sum(1 for v in field_extracted.values() if v != 'unknown')} fields via regex")
             field_extracted["_source_frame"] = image_path
             field_extracted["_extraction_method"] = "field-level regex"
             return field_extracted
