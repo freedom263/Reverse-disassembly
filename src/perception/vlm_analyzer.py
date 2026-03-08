@@ -84,6 +84,14 @@ ANALYSIS_PROMPT_ZH = """你是一位专业的AI视频制作分析师。
   "overall_quality": "制作质量估计（low/medium/high/cinematic）"
 }"""
 
+RETRY_PROMPT_EN = """Return ONLY one valid JSON object with keys:
+subject, action, visual_style, lighting, camera_angle, color_palette, background, text_overlays, scaffolding_cues, overall_quality.
+Use short phrases. If uncertain, use "unknown". No markdown. No extra text."""
+
+RETRY_PROMPT_ZH = """仅输出一个有效 JSON 对象，键必须是：
+subject, action, visual_style, lighting, camera_angle, color_palette, background, text_overlays, scaffolding_cues, overall_quality。
+值尽量简短；不确定时填 "unknown"。不要 markdown，不要额外说明。"""
+
 
 class VLMAnalyzer:
     """
@@ -98,6 +106,18 @@ class VLMAnalyzer:
     _instance_tokenizer = None
     _instance_device = None
     _instance_dtype = None
+    EXPECTED_KEYS = [
+        "subject",
+        "action",
+        "visual_style",
+        "lighting",
+        "camera_angle",
+        "color_palette",
+        "background",
+        "text_overlays",
+        "scaffolding_cues",
+        "overall_quality",
+    ]
 
     def __init__(self, model_id: str = None, device: str = "auto", lang: str = "en"):
         """
@@ -208,18 +228,33 @@ class VLMAnalyzer:
                     # This uses the traditional loading path without accelerate's optimization
                     if target_device == "cuda":
                         # Load to GPU directly with target dtype
-                        VLMAnalyzer._instance_model = AutoModel.from_pretrained(
-                            self.model_id,
-                            torch_dtype=dtype,
-                            trust_remote_code=True,
-                        ).to(target_device)
+                        try:
+                            VLMAnalyzer._instance_model = AutoModel.from_pretrained(
+                                self.model_id,
+                                dtype=dtype,
+                                trust_remote_code=True,
+                            ).to(target_device)
+                        except TypeError:
+                            # Backward compatibility for older transformers signatures
+                            VLMAnalyzer._instance_model = AutoModel.from_pretrained(
+                                self.model_id,
+                                torch_dtype=dtype,
+                                trust_remote_code=True,
+                            ).to(target_device)
                     else:
                         # Load to CPU
-                        VLMAnalyzer._instance_model = AutoModel.from_pretrained(
-                            self.model_id,
-                            torch_dtype=dtype,
-                            trust_remote_code=True,
-                        )
+                        try:
+                            VLMAnalyzer._instance_model = AutoModel.from_pretrained(
+                                self.model_id,
+                                dtype=dtype,
+                                trust_remote_code=True,
+                            )
+                        except TypeError:
+                            VLMAnalyzer._instance_model = AutoModel.from_pretrained(
+                                self.model_id,
+                                torch_dtype=dtype,
+                                trust_remote_code=True,
+                            )
                     
                     # CRITICAL FIX 4: Make InternLM2ForCausalLM inherit from GenerationMixin
                     # transformers>=4.50 removed automatic GenerationMixin inheritance
@@ -301,24 +336,51 @@ class VLMAnalyzer:
             dtype=self.dtype,
             device=self.device,
         )
-        
-        # Generation config - InternVL2's chat() expects a dict, not GenerationConfig object
+
+        # Generation config - InternVL2's chat() expects a dict.
+        # Use anti-repetition settings to avoid degenerate loops like "清水清水...".
         generation_config = {
-            "max_new_tokens": 512,
-            "do_sample": False,
+            "max_new_tokens": 320,
+            "do_sample": True,
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "repetition_penalty": 1.12,
+            "no_repeat_ngram_size": 4,
         }
-        
-        # Run inference
+
+        # 1) Primary attempt with full analysis prompt
         response = self.model.chat(
             self.tokenizer,
             pixel_values,
             self.prompt,
             generation_config,
         )
-        
-        # Parse JSON from response
-        result = self._parse_response(response, image_path)
-        return result
+        parsed = self._try_parse_response(response)
+        if parsed is not None and not self._is_degenerate_response(response):
+            parsed["_source_frame"] = image_path
+            return parsed
+
+        # 2) Retry with stronger structure constraint if first output is malformed/degenerate
+        retry_prompt = RETRY_PROMPT_ZH if self.lang == "zh" else RETRY_PROMPT_EN
+        retry_config = {
+            "max_new_tokens": 220,
+            "do_sample": False,
+            "repetition_penalty": 1.15,
+            "no_repeat_ngram_size": 4,
+        }
+        retry_response = self.model.chat(
+            self.tokenizer,
+            pixel_values,
+            retry_prompt,
+            retry_config,
+        )
+        retry_parsed = self._try_parse_response(retry_response)
+        if retry_parsed is not None:
+            retry_parsed["_source_frame"] = image_path
+            return retry_parsed
+
+        print("  [WARN] Could not parse JSON after retry, returning fallback object")
+        return self._fallback_result(retry_response, image_path)
 
     def analyze_batch(self, image_paths: list[str]) -> list[dict]:
         """
@@ -342,32 +404,88 @@ class VLMAnalyzer:
                 results.append({"_source_frame": path, "_error": str(e)})
         return results
 
-    def _parse_response(self, response: str, image_path: str) -> dict:
-        """Extract JSON dict from model response string."""
-        # Try to find JSON block in response
-        json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group())
-            except json.JSONDecodeError:
-                pass
-        
-        # Fallback: try parsing entire response
+    def _sanitize_response(self, response: str) -> str:
+        """Strip wrappers and keep only plausible JSON text."""
+        clean = (response or "").strip()
+        clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"\s*```$", "", clean)
+        return clean.strip()
+
+    def _extract_json_block(self, text: str) -> str | None:
+        """Extract first balanced JSON object block from arbitrary text."""
+        start = text.find("{")
+        if start == -1:
+            return None
+
+        depth = 0
+        for i in range(start, len(text)):
+            ch = text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+        return None
+
+    def _normalize_result(self, data: dict) -> dict:
+        """Normalize model output into the fixed schema expected downstream."""
+        normalized = {}
+        for key in self.EXPECTED_KEYS:
+            value = data.get(key, "unknown")
+            if value is None:
+                value = "unknown"
+            if not isinstance(value, str):
+                value = str(value)
+            normalized[key] = value.strip() if value.strip() else "unknown"
+        return normalized
+
+    def _try_parse_response(self, response: str) -> dict | None:
+        """Best-effort parse of JSON response. Returns None when parsing fails."""
+        clean = self._sanitize_response(response)
+
+        # 1) Parse whole string
         try:
-            clean = response.strip()
-            if clean.startswith("```"):
-                clean = re.sub(r'^```[a-z]*\n?', '', clean)
-                clean = re.sub(r'\n?```$', '', clean)
-            return json.loads(clean)
+            obj = json.loads(clean)
+            if isinstance(obj, dict):
+                return self._normalize_result(obj)
         except json.JSONDecodeError:
-            print(f"  [WARN] Could not parse JSON, returning raw response")
-            return {
-                "subject": "unknown",
-                "visual_style": "unknown",
-                "overall_quality": "unknown",
-                "_raw_response": response,
-                "_source_frame": image_path,
-            }
+            pass
+
+        # 2) Parse extracted balanced JSON block
+        block = self._extract_json_block(clean)
+        if block:
+            try:
+                obj = json.loads(block)
+                if isinstance(obj, dict):
+                    return self._normalize_result(obj)
+            except json.JSONDecodeError:
+                return None
+        return None
+
+    def _is_degenerate_response(self, response: str) -> bool:
+        """Detect obvious repetitive collapse in generated text."""
+        text = (response or "").strip()
+        if not text:
+            return True
+
+        # Repeated short token patterns, e.g. "清水" repeated many times
+        if re.search(r"(.{1,4})\1{10,}", text):
+            return True
+
+        # Very low diversity is usually a collapsed generation
+        short = text[:200]
+        unique_chars = len(set(short))
+        if len(short) >= 80 and unique_chars <= 8:
+            return True
+        return False
+
+    def _fallback_result(self, response: str, image_path: str) -> dict:
+        """Fallback object when response is still unparsable after retry."""
+        result = {key: "unknown" for key in self.EXPECTED_KEYS}
+        result["_raw_response"] = response
+        result["_source_frame"] = image_path
+        return result
 
 
 # ---------------------------------------------------------------------------
