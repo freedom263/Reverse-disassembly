@@ -49,48 +49,21 @@ def _load_image(image_path: str, input_size=448) -> torch.Tensor:
 # Prompt templates
 # ---------------------------------------------------------------------------
 
-ANALYSIS_PROMPT_EN = """You are a professional AI video production analyst.
-Analyze this educational video keyframe and extract information to reverse-engineer the prompt that generated it.
+ANALYSIS_PROMPT_EN = """Analyze this image. Output ONLY this exact JSON:
+{"subject":"main subject/object","action":"what is happening","visual_style":"art style like photorealistic, 3D animation, or cinematic","lighting":"lighting like soft studio or natural daylight","camera_angle":"camera angle like close-up or wide shot","color_palette":"dominant colors","background":"background type","text_overlays":"visible text or labels","scaffolding_cues":"pedagogical aids like arrows or highlights","overall_quality":"low, medium, high, or cinematic"}
+Fill EVERY field. Use simple phrases. If uncertain, write "unknown". Output NOTHING except the JSON object."""
 
-Output ONLY a valid JSON object with these exact keys:
-{
-  "subject": "main subject/object in the scene",
-  "action": "what is happening / motion description",
-  "visual_style": "art style (e.g. photorealistic, 3D animation, motion graphics, cartoon, cinematic)",
-  "lighting": "lighting description (e.g. soft studio, dramatic side lighting, natural daylight)",
-  "camera_angle": "camera angle (e.g. close-up, wide shot, bird's eye, eye-level)",
-  "color_palette": "dominant colors (e.g. cool blues and whites, warm earth tones)",
-  "background": "background description (e.g. clean white, abstract gradient, realistic environment)",
-  "text_overlays": "any visible text or labels in the frame",
-  "scaffolding_cues": "pedagogical visual aids present (e.g. arrows, highlights, diagrams, callouts)",
-  "overall_quality": "production quality estimate (low/medium/high/cinematic)"
-}
-Do not include any explanation, only the JSON."""
+ANALYSIS_PROMPT_ZH = """分析这张图。仅输出这个确切的 JSON（不要其他任何文字）：
+{"subject":"主体/对象","action":"正在发生的事","visual_style":"艺术风格如写实、3D动画、电影级","lighting":"光照如柔和或自然日光","camera_angle":"摄像角度如特写或广角","color_palette":"主要颜色","background":"背景类型","text_overlays":"可见的文字","scaffolding_cues":"教学辅助如箭头","overall_quality":"low、medium、high 或 cinematic"}
+每个字段都要填。不确定时写 "unknown"。只输出 JSON，无其他文字。"""
 
-ANALYSIS_PROMPT_ZH = """你是一位专业的AI视频制作分析师。
-分析这张教学视频关键帧，提取信息以反推生成该视频的提示词。
+RETRY_PROMPT_EN = """Output exactly this JSON (NOTHING else):
+{"subject":"","action":"","visual_style":"","lighting":"","camera_angle":"","color_palette":"","background":"","text_overlays":"","scaffolding_cues":"","overall_quality":""}
+For each field, write a short phrase or "unknown" if unsure."""
 
-仅输出以下格式的JSON，不要包含任何解释：
-{
-  "subject": "画面中的主要主体/对象",
-  "action": "正在发生的事情/动作描述",
-  "visual_style": "艺术风格（如：写实、3D动画、动态图形、卡通、电影级）",
-  "lighting": "光照描述（如：柔和工作室灯光、戏剧性侧光、自然日光）",
-  "camera_angle": "摄像角度（如：特写、广角、俯视、平视）",
-  "color_palette": "主色调（如：冷蓝色和白色、温暖大地色）",
-  "background": "背景描述（如：纯白、抽象渐变、真实环境）",
-  "text_overlays": "画面中可见的文字或标签",
-  "scaffolding_cues": "教学视觉辅助（如：箭头、高亮、图表、标注框）",
-  "overall_quality": "制作质量估计（low/medium/high/cinematic）"
-}"""
-
-RETRY_PROMPT_EN = """Return ONLY one valid JSON object with keys:
-subject, action, visual_style, lighting, camera_angle, color_palette, background, text_overlays, scaffolding_cues, overall_quality.
-Use short phrases. If uncertain, use "unknown". No markdown. No extra text."""
-
-RETRY_PROMPT_ZH = """仅输出一个有效 JSON 对象，键必须是：
-subject, action, visual_style, lighting, camera_angle, color_palette, background, text_overlays, scaffolding_cues, overall_quality。
-值尽量简短；不确定时填 "unknown"。不要 markdown，不要额外说明。"""
+RETRY_PROMPT_ZH = """输出这个 JSON（只有这个）：
+{"subject":"","action":"","visual_style":"","lighting":"","camera_angle":"","color_palette":"","background":"","text_overlays":"","scaffolding_cues":"","overall_quality":""}
+每个字段填简短的词或 "unknown"。"""
 
 
 class VLMAnalyzer:
@@ -337,50 +310,50 @@ class VLMAnalyzer:
             device=self.device,
         )
 
-        # Generation config - InternVL2's chat() expects a dict.
-        # Use anti-repetition settings to avoid degenerate loops like "清水清水...".
-        generation_config = {
-            "max_new_tokens": 320,
-            "do_sample": True,
-            "temperature": 0.2,
-            "top_p": 0.9,
-            "repetition_penalty": 1.12,
-            "no_repeat_ngram_size": 4,
+        # ========== ATTEMPT 1: Deterministic generation with strong JSON syntax ==========
+        gen_config_1 = {
+            "max_new_tokens": 280,
+            "do_sample": False,  # Greedy decoding for consistency
         }
-
-        # 1) Primary attempt with full analysis prompt
-        response = self.model.chat(
+        
+        response_1 = self.model.chat(
             self.tokenizer,
             pixel_values,
             self.prompt,
-            generation_config,
+            gen_config_1,
         )
-        parsed = self._try_parse_response(response)
-        if parsed is not None and not self._is_degenerate_response(response):
-            parsed["_source_frame"] = image_path
-            return parsed
+        parsed_1 = self._try_parse_response(response_1)
+        if parsed_1 is not None and not self._is_degenerate_response(response_1):
+            parsed_1["_source_frame"] = image_path
+            return parsed_1
 
-        # 2) Retry with stronger structure constraint if first output is malformed/degenerate
+        # ========== ATTEMPT 2: Explicit retry with minimal template ==========
         retry_prompt = RETRY_PROMPT_ZH if self.lang == "zh" else RETRY_PROMPT_EN
-        retry_config = {
-            "max_new_tokens": 220,
+        gen_config_2 = {
+            "max_new_tokens": 200,
             "do_sample": False,
-            "repetition_penalty": 1.15,
-            "no_repeat_ngram_size": 4,
         }
-        retry_response = self.model.chat(
+        
+        response_2 = self.model.chat(
             self.tokenizer,
             pixel_values,
             retry_prompt,
-            retry_config,
+            gen_config_2,
         )
-        retry_parsed = self._try_parse_response(retry_response)
-        if retry_parsed is not None:
-            retry_parsed["_source_frame"] = image_path
-            return retry_parsed
+        parsed_2 = self._try_parse_response(response_2)
+        if parsed_2 is not None:
+            parsed_2["_source_frame"] = image_path
+            return parsed_2
+
+        # ========== ATTEMPT 3: Field-level extraction from raw text ==========
+        field_extracted = self._extract_fields_from_text(response_2 or response_1)
+        if field_extracted and any(v != "unknown" for v in field_extracted.values()):
+            field_extracted["_source_frame"] = image_path
+            field_extracted["_extraction_method"] = "field-level regex"
+            return field_extracted
 
         print("  [WARN] Could not parse JSON after retry, returning fallback object")
-        return self._fallback_result(retry_response, image_path)
+        return self._fallback_result(response_2 or response_1, image_path)
 
     def analyze_batch(self, image_paths: list[str]) -> list[dict]:
         """
@@ -486,6 +459,40 @@ class VLMAnalyzer:
         result["_raw_response"] = response
         result["_source_frame"] = image_path
         return result
+
+    def _extract_fields_from_text(self, text: str) -> dict | None:
+        """
+        Attempt to extract field values from arbitrary text using regex.
+        Last-resort fallback when JSON parsing completely fails.
+        """
+        if not text or len(text.strip()) < 10:
+            return None
+        
+        result = {key: "unknown" for key in self.EXPECTED_KEYS}
+        
+        # Try to find key-value patterns: "key: value" or "\"key\": \"value\""
+        lines = text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith('[') or line.startswith('-'):
+                continue
+            
+            # Match "key: value" patterns
+            for key in self.EXPECTED_KEYS:
+                # Pattern 1: "key: value"
+                match = re.search(rf'{key}\s*[:\s]+([^,\n{{}}]+)', line, re.IGNORECASE)
+                if match:
+                    value = match.group(1).strip().strip('\'"')
+                    if value and len(value) < 100:
+                        result[key] = value
+                        break
+        
+        # If we found at least 3 non-"unknown" fields, return it
+        filled = sum(1 for v in result.values() if v != "unknown")
+        if filled >= 3:
+            return result
+        
+        return None
 
 
 # ---------------------------------------------------------------------------
