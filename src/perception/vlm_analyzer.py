@@ -234,6 +234,9 @@ class VLMAnalyzer:
                     # InternVL2's chat() method should work without this modification.
                     # If we need generate() functionality, we'll access it through the model's
                     # existing implementation rather than monkey-patching the class hierarchy.
+                finally:
+                    # Restore original functions even if model loading fails
+                    torch.linspace = original_linspace
                     PreTrainedModel.mark_tied_weights_as_initialized = original_mark_tied
                 
                 VLMAnalyzer._instance_model.eval()
