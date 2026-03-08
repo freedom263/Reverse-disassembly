@@ -228,12 +228,34 @@ class VLMAnalyzer:
                                 torch_dtype=dtype,
                                 trust_remote_code=True,
                             )
-                    
-                    # REMOVED: GenerationMixin dynamic inheritance manipulation
-                    # This was causing token generation to collapse into random characters.
-                    # InternVL2's chat() method should work without this modification.
-                    # If we need generate() functionality, we'll access it through the model's
-                    # existing implementation rather than monkey-patching the class hierarchy.
+
+                    # transformers>=4.50 removes GenerationMixin from some remote-code models.
+                    # InternVL2.chat() still calls language_model.generate(), so patch the instance
+                    # with a safe dynamic subclass instead of mutating the original class hierarchy.
+                    if hasattr(VLMAnalyzer._instance_model, "language_model"):
+                        from transformers import GenerationConfig
+                        from transformers.generation.utils import GenerationMixin
+
+                        language_model = VLMAnalyzer._instance_model.language_model
+                        language_model_class = language_model.__class__
+
+                        if not isinstance(language_model, GenerationMixin):
+                            patched_class = type(
+                                f"Patched{language_model_class.__name__}",
+                                (language_model_class, GenerationMixin),
+                                {},
+                            )
+                            language_model.__class__ = patched_class
+                            print(
+                                f"[VLMAnalyzer] Patched {language_model_class.__name__} instance with GenerationMixin"
+                            )
+
+                        if not hasattr(language_model, "generation_config"):
+                            try:
+                                language_model.generation_config = GenerationConfig.from_pretrained(self.model_id)
+                            except Exception:
+                                language_model.generation_config = GenerationConfig()
+                            print("[VLMAnalyzer] Added generation_config to language_model")
                 finally:
                     # Restore original functions even if model loading fails
                     torch.linspace = original_linspace
@@ -288,12 +310,16 @@ class VLMAnalyzer:
         )
 
         # ========== ATTEMPT 1: Call chat() with minimal, safe parameters ==========
-        # Remove generation_config to let InternVL2 use its defaults
         try:
+            generation_config_1 = {
+                "max_new_tokens": 200,
+                "do_sample": False,
+            }
             response_1 = self.model.chat(
                 self.tokenizer,
                 pixel_values,
                 self.prompt,
+                generation_config_1,
             )
             
             parsed_1 = self._try_parse_response(response_1)
@@ -308,6 +334,7 @@ class VLMAnalyzer:
         try:
             gen_config_minimal = {
                 "max_new_tokens": 200,
+                "do_sample": False,
             }
             response_2 = self.model.chat(
                 self.tokenizer,
